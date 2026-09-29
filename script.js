@@ -154,7 +154,7 @@
         'Servicios en Red': 'Saúl González',
         'Aplicaciones Web': 'Marisol Casado',
         'Proyecto Intermodular': 'María Manchado',
-        'Digitalización': 'María Manchado',
+        'Digitalización': 'Marisol Casado',
         'Sostenibilidad': 'Manuel Manchado',
         'Sistemas Operativos / IPE II': 'Manuel Manchado',
     });
@@ -292,7 +292,16 @@
                 const parsed = JSON.parse(raw);
                 if (!isObject(parsed)) return base;
 
-                return {
+                // Corrección de docencia (curso 26/27): Digitalización la imparte Marisol Casado.
+                // Se aplica también a estados ya guardados para no perpetuar el dato antiguo
+                // (si el usuario la cambió a mano a otro valor, se respeta su elección).
+                let teachersCorrected = false;
+                if (isObject(parsed.teachers) && parsed.teachers['Digitalización'] === 'María Manchado') {
+                    parsed.teachers['Digitalización'] = 'Marisol Casado';
+                    teachersCorrected = true;
+                }
+
+                const state = {
                     version: SCHEMA_VERSION,
                     schedule: isObject(parsed.schedule) ? this.#sanitizeSchedule(parsed.schedule) : base.schedule,
                     teachers: isObject(parsed.teachers) ? this.#sanitizeTeachers(parsed.teachers) : base.teachers,
@@ -300,6 +309,12 @@
                     absences: isObject(parsed.absences) ? this.#sanitizeAbsences(parsed.absences) : {},
                     extracurricular: isObject(parsed.extracurricular) ? this.#sanitizeExtracurricular(parsed.extracurricular) : {},
                 };
+
+                // Persiste la corrección para que localStorage quede coherente
+                if (teachersCorrected) {
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* noop */ }
+                }
+                return state;
             } catch (err) {
                 console.error('Store: estado corrupto, se restauran los valores por defecto.', err);
                 return base;

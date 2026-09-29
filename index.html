@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Dashboard interactivo de horario académico, calendario de exámenes, faltas y recursos para FP Sistemas Microinformáticos y Redes (SMR).">
+    <title>Horario Académico &amp; Centro de Control</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+    <script src="script.js?v=9" defer></script>
+</head>
+<body>
+    <a class="skip-link" href="#main-content">Saltar al contenido principal</a>
+
+    <!-- Header principal -->
+    <header class="app-header">
+        <div class="header-essential">
+            <button id="btn-toggle-sidebar" class="btn-icon" aria-label="Abrir menú de navegación" aria-expanded="false" aria-controls="sidebar" title="Abrir menú">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            </button>
+            <div class="brand-info">
+                <h1>Horario Académico</h1>
+                <p class="live-datetime" id="live-datetime">--:--:-- · --/--/----</p>
+            </div>
+        </div>
+
+        <div class="header-status-compact">
+            <div class="status-banner" id="status-banner" role="status" aria-live="polite">
+                <span class="status-badge" id="status-badge">Estado</span>
+                <span class="status-text" id="status-text">Cargando…</span>
+            </div>
+            <button id="btn-theme" class="btn-icon" title="Cambiar tema" aria-label="Cambiar tema claro u oscuro">
+                <svg class="svg-icon" id="theme-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- Overlay y Sidebar Lateral -->
+    <div id="sidebar-overlay" class="sidebar-overlay"></div>
+    <aside id="sidebar" class="sidebar-drawer" role="dialog" aria-modal="true" aria-label="Menú principal" aria-hidden="true">
+        <div class="sidebar-header">
+            <h2>Navegación</h2>
+            <button id="btn-close-sidebar" class="btn-close-sidebar" aria-label="Cerrar menú">&times;</button>
+        </div>
+
+        <nav class="sidebar-nav" aria-label="Secciones de la aplicación">
+            <button class="nav-item active" data-view="schedule-view" aria-current="page">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                <span>Horario de Clases</span>
+            </button>
+            <button class="nav-item" data-view="calendar-view">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M8 14h.01"/><path d="M12 14h.01"/><path d="M16 14h.01"/><path d="M8 18h.01"/><path d="M12 18h.01"/></svg>
+                <span>Calendario de Exámenes</span>
+            </button>
+            <button class="nav-item" data-view="directory-view">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                <span>Directorio Académico</span>
+            </button>
+            <button class="nav-item" data-view="resources-view">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                <span>Recursos &amp; Materiales</span>
+            </button>
+        </nav>
+
+        <div class="sidebar-section">
+            <h3 class="sidebar-section-title">Gestión de datos</h3>
+            <button id="btn-add-subject" class="btn-sidebar-action btn-sidebar-primary">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+                Nueva asignatura
+            </button>
+            <button id="btn-export" class="btn-sidebar-action">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                Exportar datos (JSON)
+            </button>
+            <button id="btn-import" class="btn-sidebar-action">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                Importar datos (JSON)
+            </button>
+            <input type="file" id="import-file" accept="application/json,.json" class="visually-hidden-input" tabindex="-1" aria-hidden="true">
+            <button id="btn-reset" class="btn-sidebar-action btn-sidebar-danger">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                Restaurar horario original
+            </button>
+        </div>
+
+        <div class="sidebar-footer">
+            <button id="btn-print" class="btn-sidebar-action">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                Imprimir horario
+            </button>
+        </div>
+    </aside>
+
+    <!-- Contenido Principal -->
+    <main id="main-content" class="main-content">
+        <!-- VISTA 1: HORARIO LECTIVO -->
+        <section id="schedule-view" class="app-view active" aria-labelledby="schedule-title">
+            <div class="view-header-bar">
+                <h2 id="schedule-title">Horario Semanal</h2>
+                <div class="schedule-controls">
+                    <div class="view-toggle" role="group" aria-label="Modo de vista del horario">
+                        <button id="btn-weekly" class="btn active" aria-pressed="true">Semana</button>
+                        <button id="btn-daily" class="btn" aria-pressed="false">Hoy</button>
+                    </div>
+                    <label class="visually-hidden" for="day-select">Día de la semana</label>
+                    <select id="day-select" class="day-select" style="display: none;">
+                        <option value="1">Lunes</option>
+                        <option value="2">Martes</option>
+                        <option value="3">Miércoles</option>
+                        <option value="4">Jueves</option>
+                        <option value="5">Viernes</option>
+                    </select>
+                </div>
+            </div>
+            <div class="schedule-wrapper" id="schedule-wrapper" aria-label="Parrilla del horario semanal"></div>
+
+            <!-- Extraescolares: SOLO visible si existen actividades en turno de tarde -->
+            <section class="extras-section" id="extras-section" aria-labelledby="extras-title" hidden>
+                <div class="extras-header">
+                    <h3 id="extras-title">Extraescolares</h3>
+                    <span class="extras-subtitle">Actividades fuera de la jornada lectiva · turno de tarde 16:00–21:00</span>
+                </div>
+                <div class="extras-grid" id="extras-grid"></div>
+            </section>
+        </section>
+
+        <!-- VISTA 2: CALENDARIO MENSUAL -->
+        <section id="calendar-view" class="app-view" aria-labelledby="calendar-title">
+            <div class="view-header-bar">
+                <h2 id="calendar-title">Calendario de Exámenes y Entregas</h2>
+                <div class="calendar-nav-controls">
+                    <button id="btn-prev-month" class="btn-icon" aria-label="Ver mes anterior">&lt;</button>
+                    <span id="calendar-month-year" class="month-label" role="status" aria-live="polite">Mes Año</span>
+                    <button id="btn-next-month" class="btn-icon" aria-label="Ver mes siguiente">&gt;</button>
+                </div>
+            </div>
+            <div class="calendar-grid-container">
+                <div class="calendar-days-header" aria-hidden="true">
+                    <span>Lun</span><span>Mar</span><span>Mié</span><span>Jue</span><span>Vie</span><span>Sáb</span><span>Dom</span>
+                </div>
+                <div class="calendar-dates-grid" id="calendar-dates-grid"></div>
+            </div>
+            <div class="calendar-day-details" id="calendar-day-details" aria-live="polite">
+                <h3 id="selected-day-title">Eventos del día seleccionado</h3>
+                <div id="calendar-tasks-container" class="calendar-tasks-container">
+                    <p class="absence-hint">Haz clic en un día del calendario para revisar exámenes o tareas agendadas.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- VISTA 3: DIRECTORIO ACADÉMICO -->
+        <section id="directory-view" class="app-view" aria-labelledby="directory-title">
+            <div class="view-header-bar">
+                <h2 id="directory-title">Directorio Académico</h2>
+                <div class="directory-controls">
+                    <label class="visually-hidden" for="directory-search">Buscar profesor o asignatura</label>
+                    <input type="search" id="directory-search" class="search-input" placeholder="Buscar profesor o asignatura…">
+                    <div class="modal-tabs inline-tabs" role="tablist" aria-label="Tipo de índice">
+                        <button class="tab-btn active" id="indextab-btn-teachers" data-indextab="teachers" role="tab" aria-selected="true" aria-controls="indextab-teachers">Profesores</button>
+                        <button class="tab-btn" id="indextab-btn-subjects" data-indextab="subjects" role="tab" aria-selected="false" aria-controls="indextab-subjects" tabindex="-1">Asignaturas</button>
+                    </div>
+                </div>
+            </div>
+            <div id="indextab-teachers" class="tab-content active" role="tabpanel" aria-labelledby="indextab-btn-teachers" tabindex="0">
+                <div class="index-accordion-container" id="teachers-index-list"></div>
+            </div>
+            <div id="indextab-subjects" class="tab-content" role="tabpanel" aria-labelledby="indextab-btn-subjects" tabindex="0" hidden>
+                <div class="index-accordion-container" id="subjects-index-list"></div>
+            </div>
+        </section>
+
+        <!-- VISTA 4: RECURSOS GENERALES -->
+        <section id="resources-view" class="app-view" aria-labelledby="resources-title">
+            <div class="view-header-bar">
+                <h2 id="resources-title">Centro de Recursos y Materiales</h2>
+                <label class="visually-hidden" for="resources-search">Buscar enlaces o manuales</label>
+                <input type="search" id="resources-search" class="search-input" placeholder="Buscar enlaces o manuales…">
+            </div>
+            <div class="resources-cards-grid" id="general-resources-grid"></div>
+        </section>
+    </main>
+
+    <!-- Modal para Detalle de Asignatura/Recreo -->
+    <div id="detail-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title" aria-hidden="true">
+        <div class="modal-card">
+            <button class="modal-close" id="modal-close" aria-label="Cerrar ventana de detalle">&times;</button>
+
+            <div class="modal-header">
+                <span id="modal-tag" class="subject-tag">Asignatura</span>
+                <h2 id="modal-title">Nombre de la Asignatura</h2>
+            </div>
+
+            <div class="modal-tabs" id="modal-tab-headers" role="tablist" aria-label="Información del módulo">
+                <button class="tab-btn active" data-tab="info" role="tab" aria-selected="true" aria-controls="tab-info" id="tab-btn-info">General</button>
+                <button class="tab-btn" data-tab="tasks" role="tab" aria-selected="false" aria-controls="tab-tasks" id="tab-btn-tasks" tabindex="-1">Tareas/Exámenes <span id="tab-task-count" class="badge-count">0</span></button>
+                <button class="tab-btn" data-tab="absences" role="tab" aria-selected="false" aria-controls="tab-absences" id="tab-btn-absences" tabindex="-1">Faltas</button>
+            </div>
+
+            <!-- Tab General -->
+            <div class="tab-content active" id="tab-info" role="tabpanel" aria-labelledby="tab-btn-info" tabindex="0">
+                <div class="modal-info-list">
+                    <div class="info-row" id="row-teacher">
+                        <span class="info-icon" aria-hidden="true">
+                            <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                        </span>
+                        <div class="info-content">
+                            <span class="info-label">Profesor/a</span>
+                            <span class="info-value" id="modal-teacher">-</span>
+                        </div>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-icon" aria-hidden="true">
+                            <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                        </span>
+                        <div class="info-content">
+                            <span class="info-label">Horario</span>
+                            <span class="info-value" id="modal-time">-</span>
+                        </div>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-icon" aria-hidden="true">
+                            <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                        </span>
+                        <div class="info-content">
+                            <span class="info-label">Estado</span>
+                            <span class="info-value" id="modal-status">-</span>
+                        </div>
+                    </div>
+                    <div class="info-row" id="modal-resources-row">
+                        <span class="info-icon" aria-hidden="true">
+                            <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                        </span>
+                        <div class="info-content">
+                            <span class="info-label">Materiales &amp; Enlaces</span>
+                            <div class="resource-links-container" id="modal-resources-list"></div>
+                        </div>
+                    </div>
+                </div>
+                <button id="btn-edit-subject" class="btn-secondary-edit" type="button">
+                    <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M17 3a2.83 2.83 0 0 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                    Editar asignatura y horario
+                </button>
+            </div>
+
+            <!-- Tab Tareas/Exámenes -->
+            <div class="tab-content" id="tab-tasks" role="tabpanel" aria-labelledby="tab-btn-tasks" tabindex="0" hidden>
+                <form id="task-form" class="task-form">
+                    <label class="visually-hidden" for="task-input">Descripción de la tarea o examen</label>
+                    <input type="text" id="task-input" placeholder="Añadir tarea o examen…" required>
+                    <label class="visually-hidden" for="task-type">Tipo de evento</label>
+                    <select id="task-type">
+                        <option value="Tarea">Tarea</option>
+                        <option value="Examen">Examen</option>
+                        <option value="Entrega">Entrega</option>
+                    </select>
+                    <label class="visually-hidden" for="task-date">Fecha límite</label>
+                    <input type="date" id="task-date">
+                    <button type="submit" class="btn-add" aria-label="Añadir tarea">+</button>
+                </form>
+                <div class="task-list" id="task-list" aria-live="polite"></div>
+            </div>
+
+            <!-- Tab Faltas -->
+            <div class="tab-content" id="tab-absences" role="tabpanel" aria-labelledby="tab-btn-absences" tabindex="0" hidden>
+                <div class="absence-box">
+                    <span class="absence-title">Horas lectivas de falta acumuladas</span>
+                    <div class="absence-counter-controls">
+                        <button id="btn-sub-absence" class="btn-count" aria-label="Restar una falta">−</button>
+                        <span id="absence-count-display" class="absence-count" aria-live="polite">0</span>
+                        <button id="btn-add-absence" class="btn-count" aria-label="Añadir una falta">+</button>
+                    </div>
+                    <div class="absence-progress" id="absence-progress" role="progressbar"
+                         aria-valuemin="0" aria-valuemax="15" aria-valuenow="0"
+                         aria-label="Faltas acumuladas respecto al límite del módulo">
+                        <div class="absence-progress-bar" id="absence-progress-fill"></div>
+                    </div>
+                    <p class="absence-hint" id="absence-progress-label">0 h / 0 h permitidas (0 %)</p>
+                    <p class="absence-hint" id="absence-trimester-info">Límite calculado sobre las horas reales del 1er trimestre.</p>
+                    <p class="absence-hint">Registra y controla las horas que no has asistido a este módulo.</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Editor de Asignaturas -->
+    <div id="subject-editor-modal" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="editor-title" aria-hidden="true">
+        <div class="modal-card">
+            <button class="modal-close" id="editor-close" aria-label="Cerrar editor de asignatura">&times;</button>
+
+            <div class="modal-header">
+                <span id="editor-tag" class="subject-tag">Editor</span>
+                <h2 id="editor-title">Nueva asignatura</h2>
+            </div>
+
+            <form id="subject-form" class="editor-form" novalidate>
+                <div class="form-field">
+                    <label for="subject-name">Nombre de la asignatura</label>
+                    <input type="text" id="subject-name" name="name" required maxlength="60" autocomplete="off">
+                </div>
+                <div class="form-field">
+                    <label for="subject-teacher">Profesor/a</label>
+                    <input type="text" id="subject-teacher" name="teacher" list="teachers-datalist" maxlength="60" autocomplete="off">
+                    <datalist id="teachers-datalist"></datalist>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-field">
+                        <label for="subject-day">Día</label>
+                        <select id="subject-day" name="day"></select>
+                    </div>
+                    <div class="form-field" id="subject-slot-field">
+                        <label for="subject-slot" id="subject-slot-label">Franja horaria</label>
+                        <select id="subject-slot" name="slot"></select>
+                    </div>
+                </div>
+                <!-- Horario flexible: libre fuera de la jornada lectiva (08:30-14:30) -->
+                <div class="form-row-2" id="subject-times" hidden>
+                    <div class="form-field">
+                        <label for="subject-start">Hora de inicio</label>
+                        <input type="time" id="subject-start" name="start" value="16:00" step="300">
+                    </div>
+                    <div class="form-field">
+                        <label for="subject-end">Hora de fin</label>
+                        <input type="time" id="subject-end" name="end" value="17:15" step="300">
+                    </div>
+                </div>
+                <div class="form-field">
+                    <label for="subject-color">Color en la parrilla</label>
+                    <select id="subject-color" name="colorKey"></select>
+                </div>
+                <p id="editor-error" class="editor-error" role="alert" hidden></p>
+                <div class="editor-actions">
+                    <button type="button" id="btn-delete-slot" class="btn-danger-ghost">Vaciar franja</button>
+                    <span class="editor-actions-spacer"></span>
+                    <button type="button" id="btn-editor-cancel" class="btn-secondary-edit">Cancelar</button>
+                    <button type="submit" class="btn-add btn-add-wide">Guardar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <footer class="app-footer">
+        <p>Horario Académico Interactivo &bull; FP Sistemas Microinformáticos y Redes</p>
+    </footer>
+</body>
+</html>

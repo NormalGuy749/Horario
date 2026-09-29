@@ -156,7 +156,6 @@
         'Proyecto Intermodular': 'María Manchado',
         'Digitalización': 'Marisol Casado',
         'Sostenibilidad': 'Manuel Manchado',
-        'Sistemas Operativos / IPE II': 'Manuel Manchado',
     });
 
     const DEFAULT_SCHEDULE = Object.freeze({
@@ -178,7 +177,6 @@
         '3-2': { name: 'Montaje y Mantenimiento', colorKey: 'montaje' },
         '3-3': { name: 'Aplicaciones Web', colorKey: 'web' },
         '3-4': { name: 'Aplicaciones Web', colorKey: 'web' },
-        '3-5': { name: 'Sistemas Operativos / IPE II', colorKey: 'sor' },
         '3-6': { name: 'Sostenibilidad', colorKey: 'sostenibilidad' },
 
         '4-1': { name: 'Digitalización', colorKey: 'digitalizacion' },

@@ -1,9 +1,15 @@
 /**
  * Horario Académico & Centro de Control — script.js
  * ------------------------------------------------------------------
- * Arquitectura (ES6+, sin dependencias):
- *  - Store único como fuente de verdad, con persistencia versionada y
- *    saneada en localStorage (migra el formato antiguo automáticamente).
+ * Arquitectura (ES6+, sin build tools):
+ *  - Store único como fuente de verdad. Persistencia dual:
+ *      · Invitado    → memoria (datos por defecto) + localStorage.
+ *      · Autenticado → Firestore en tiempo real, documento users/{uid}.
+ *    La migración local→nube es automática en el primer inicio de sesión.
+ *  - Firebase Auth (Google) + Firestore v10+ cargados como ES modules
+ *    desde gstatic, de forma perezosa y tolerante a fallos de red.
+ *  - Puerta de escritura: cualquier mutación en modo invitado lanza el
+ *    inicio de sesión con Google y la acción se aplica al autenticarse.
  *  - Datos maestros inmutables (Object.freeze) y helpers puros.
  *  - Render mediante builders que devuelven nodos y se insertan por lotes
  *    con DocumentFragment / replaceChildren (menos reflows, sin innerHTML
@@ -24,11 +30,12 @@
     const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
     /** Creador declarativo de elementos (textContent, nunca innerHTML con datos). */
-    const el = (tag, { className = '', text = '', attrs = {}, children = [] } = {}) => {
+    const el = (tag, { className = '', text = '', attrs = {}, dataset = {}, children = [] } = {}) => {
         const node = document.createElement(tag);
         if (className) node.className = className;
         if (text) node.textContent = text;
         for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+        for (const [k, v] of Object.entries(dataset)) node.dataset[k] = v;
         for (const child of children) if (child) node.appendChild(child);
         return node;
     };
@@ -135,15 +142,15 @@
     ]);
 
     const COLOR_LABELS = Object.freeze({
-        montaje: 'Azul (Montaje)',
-        prog: 'Ámbar (Programación)',
-        sor: 'Verde (SOR)',
-        servicios: 'Violeta (Servicios)',
-        web: 'Rosa (Ap. Web)',
-        ipe: 'Turquesa (IPE)',
-        proyectos: 'Naranja (Proyectos)',
-        sostenibilidad: 'Índigo (Sostenibilidad)',
-        digitalizacion: 'Fucsia (Digitalización)',
+        montaje: 'Azul',
+        prog: 'Ámbar',
+        sor: 'Verde',
+        servicios: 'Violeta',
+        web: 'Rosa',
+        ipe: 'Turquesa',
+        proyectos: 'Naranja',
+        sostenibilidad: 'Índigo',
+        digitalizacion: 'Fucsia',
     });
 
     const DEFAULT_TEACHERS = Object.freeze({
@@ -177,6 +184,7 @@
         '3-2': { name: 'Montaje y Mantenimiento', colorKey: 'montaje' },
         '3-3': { name: 'Aplicaciones Web', colorKey: 'web' },
         '3-4': { name: 'Aplicaciones Web', colorKey: 'web' },
+        '3-5': { name: 'IPE II', colorKey: 'ipe'},
         '3-6': { name: 'Sostenibilidad', colorKey: 'sostenibilidad' },
 
         '4-1': { name: 'Digitalización', colorKey: 'digitalizacion' },
@@ -187,9 +195,9 @@
         '4-6': { name: 'Programación', colorKey: 'prog' },
 
         '5-1': { name: 'Aplicaciones Web', colorKey: 'web' },
-        '5-2': { name: 'Sostenibilidad', colorKey: 'sostenibilidad' },
+        '5-2': { name: 'Sistemas Operativos en Red', colorKey: 'sor' },
         '5-3': { name: 'Sistemas Operativos en Red', colorKey: 'sor' },
-        '5-4': { name: 'Sistemas Operativos en Red', colorKey: 'sor' },
+        '5-4': { name: 'Montaje y Mantenimiento', colorKey: 'montaje' },
         '5-5': { name: 'Servicios en Red', colorKey: 'servicios' },
         '5-6': { name: 'Servicios en Red', colorKey: 'servicios' },
     });
@@ -232,6 +240,94 @@
         holidays: Object.freeze(['2026-10-12', '2026-11-01']),
     });
 
+    /* ===================== Firebase (Auth + Firestore, ES modules CDN) =====================
+     * SDK v10+ cargado como módulos ES nativos desde gstatic (sin build tools).
+     * Sustituye los placeholders por la configuración real de tu proyecto en
+     * https://console.firebase.google.com → Project settings → Your apps.
+     */
+    const firebaseConfig = {
+    apiKey: "AIzaSyCK3T2envUOdknnAsysFo8X9K0MHCq34Z0",
+    authDomain: "horario-7bc33.firebaseapp.com",
+    projectId: "horario-7bc33",
+    storageBucket: "horario-7bc33.firebasestorage.app",
+    messagingSenderId: "784946864452",
+    appId: "1:784946864452:web:893c91ca787617f635b711",
+    measurementId: "G-FP7DHF54FH"
+    };
+
+    const FIREBASE_ENABLED = !/YOUR_/.test(firebaseConfig.apiKey);
+
+    /**
+     * Fachada del SDK de Firebase: importa dinámicamente los ES modules de
+     * gstatic una sola vez y expone las operaciones que usa la app
+     * (Auth con Google y documento users/{uid} en Firestore).
+     */
+    const CloudSvc = {
+        ready: false,
+        auth: null,
+        db: null,
+        authApi: null,
+        fsApi: null,
+        initPromise: null,
+
+        init() {
+            if (this.initPromise) return this.initPromise;
+            this.initPromise = (async () => {
+                const appMod = await import('https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js');
+                const authMod = await import('https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js');
+                const fsMod = await import('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js');
+                const app = appMod.initializeApp(firebaseConfig);
+                this.auth = authMod.getAuth(app);
+                this.db = fsMod.getFirestore(app);
+                this.authApi = authMod;
+                this.fsApi = fsMod;
+                this.ready = true;
+            })();
+            return this.initPromise;
+        },
+
+        async ensureReady() {
+            if (FIREBASE_ENABLED && !this.ready) await this.init();
+            return this.ready;
+        },
+
+        async signIn() {
+            if (!(await this.ensureReady())) {
+                window.alert('La sincronización en la nube no está configurada: edita firebaseConfig en script.js con los datos de tu proyecto Firebase.');
+                return null;
+            }
+            const provider = new this.authApi.GoogleAuthProvider();
+            provider.setCustomParameters({ prompt: 'select_account' });
+            const cred = await this.authApi.signInWithPopup(this.auth, provider);
+            return cred.user;
+        },
+
+        async signOut() {
+            if (!this.ready) return;
+            await this.authApi.signOut(this.auth);
+        },
+
+        /** Documento del usuario autenticado: users/{uid}. */
+        userDoc(uid) {
+            return this.fsApi.doc(this.db, 'users', uid);
+        },
+
+        async fetchUserDoc(uid) {
+            const snap = await this.fsApi.getDoc(this.userDoc(uid));
+            return snap.exists() ? snap.data() : null;
+        },
+
+        /** Escritura atómica de TODO el estado del Store en users/{uid}. */
+        async saveUserDoc(uid, data) {
+            await this.fsApi.setDoc(this.userDoc(uid), { ...data, syncedAt: new Date().toISOString() }, { merge: true });
+        },
+
+        /** Borrado total del documento (restaurar horario original estando autenticado). */
+        async deleteUserDoc(uid) {
+            await this.fsApi.deleteDoc(this.userDoc(uid));
+        },
+    };
+
     /*
      * Actividades fuera de la jornada lectiva ("Extraescolares"): horario
      * 100 % libre definido por el usuario (hora inicio/fin con <input type="time">).
@@ -260,170 +356,202 @@
     const STORAGE_KEY = 'academic_dashboard_v1';
     const THEME_KEY = 'academic_theme';
 
-    class Store {
-        constructor() {
-            this.state = this.#load();
+    /* --- Saneadores puros del estado, compartidos por localStorage y Firestore --- */
+
+    const storeDefaults = () => ({
+        version: SCHEMA_VERSION,
+        schedule: JSON.parse(JSON.stringify(DEFAULT_SCHEDULE)),
+        teachers: { ...DEFAULT_TEACHERS },
+        tasks: [],
+        absences: {},
+        // { "día|slotKey": { name, teacher, colorKey } } — turno de tarde
+        extracurricular: {},
+    });
+
+    const readLegacyArray = (key) => {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+            return Array.isArray(parsed) ? parsed.filter(isValidTask).map(normalizeTask) : [];
+        } catch { return []; }
+    };
+
+    const readLegacyMap = (key) => {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(key) || 'null');
+            return isObject(parsed) ? sanitizeAbsences(parsed) : {};
+        } catch { return {}; }
+    };
+
+    const isValidTask = (t) => isObject(t) && typeof t.subject === 'string' && typeof t.text === 'string';
+
+    const normalizeTask = (t) => ({
+        id: Number.isFinite(t.id) ? t.id : Date.now() + Math.floor(Math.random() * 1e6),
+        subject: String(t.subject).slice(0, 120),
+        text: String(t.text).slice(0, 300),
+        type: ['Tarea', 'Examen', 'Entrega'].includes(t.type) ? t.type : 'Tarea',
+        date: /^\d{4}-\d{2}-\d{2}$/.test(t.date || '') ? t.date : getLocalDateString(),
+        done: Boolean(t.done),
+    });
+
+    const isValidGrade = (g) => isObject(g) && typeof g.subject === 'string' && typeof g.name === 'string' && Number.isFinite(Number(g.value));
+
+    const normalizeGrade = (g) => ({
+        id: Number.isFinite(g.id) ? g.id : Date.now() + Math.floor(Math.random() * 1e6),
+        subject: String(g.subject).slice(0, 120),
+        name: String(g.name).slice(0, 120),
+        value: clamp(Number(g.value), 0, 10),
+    });
+
+    const sanitizeAbsences = (absences) => {
+        const out = {};
+        for (const [k, v] of Object.entries(absences)) {
+            const n = Number(v);
+            if (typeof k === 'string' && k && Number.isFinite(n)) out[k.slice(0, 120)] = clamp(Math.floor(n), 0, 999);
         }
+        return out;
+    };
 
-        /* --- Carga, validación y migración --- */
-        #load() {
-            const base = this.#defaults();
-            try {
-                const raw = localStorage.getItem(STORAGE_KEY);
+    const sanitizeTeachers = (teachers) => {
+        const out = {};
+        for (const [k, v] of Object.entries(teachers)) {
+            if (typeof k === 'string' && k && typeof v === 'string' && v.trim()) out[k.slice(0, 120)] = v.trim().slice(0, 120);
+        }
+        return out;
+    };
 
-                if (!raw) {
-                    // Sin estado nuevo: migra datos del formato antiguo si existen
-                    const oldTasks = this.#readLegacyArray('academic_tasks');
-                    const oldAbsences = this.#readLegacyMap('academic_absences');
-                    if (oldTasks.length || Object.keys(oldAbsences).length) {
-                        // Limpia las claves antiguas tras la migración exitosa para que un
-                        // futuro reset no "resucite" datos obsoletos en la siguiente carga.
-                        try {
-                            localStorage.removeItem('academic_tasks');
-                            localStorage.removeItem('academic_absences');
-                        } catch { /* noop */ }
-                        return { ...base, tasks: oldTasks, absences: oldAbsences };
-                    }
-                    return base;
+    const sanitizeSchedule = (schedule) => {
+        const out = {};
+        for (const [key, value] of Object.entries(schedule)) {
+            if (!/^[1-5]-[1-6]$/.test(key) || !isObject(value)) continue;
+            const name = typeof value.name === 'string' ? value.name.trim() : '';
+            if (!name) continue;
+            out[key] = { name: name.slice(0, 120), colorKey: COLOR_KEYS.includes(value.colorKey) ? value.colorKey : 'montaje' };
+        }
+        return out;
+    };
+
+    /** Valida UNA actividad fuera de jornada; devuelve el objeto limpio o null. */
+    const sanitizeExtraEntry = (value) => {
+        if (!isObject(value) || typeof value.name !== 'string' || !value.name.trim()) return null;
+        const day = Number(value.day);
+        if (!dayDef(day)) return null;
+        const timeRe = /^\d{2}:\d{2}$/;
+        const start = typeof value.start === 'string' && timeRe.test(value.start) ? value.start : null;
+        const end = typeof value.end === 'string' && timeRe.test(value.end) ? value.end : null;
+        if (!start || !end || timeToMinutes(start) >= timeToMinutes(end)) return null;
+        return {
+            day,
+            start,
+            end,
+            name: value.name.trim().slice(0, 120),
+            teacher: typeof value.teacher === 'string' ? value.teacher.trim().slice(0, 120) : '',
+            colorKey: COLOR_KEYS.includes(value.colorKey) ? value.colorKey : 'montaje',
+        };
+    };
+
+    /** Mapa completo saneado con claves "día|HH:MM". */
+    const sanitizeExtracurricular = (extras) => {
+        const out = {};
+        for (const [key, value] of Object.entries(extras || {})) {
+            let v = value;
+            // Compatibilidad: el formato previo guardaba {name,teacher,colorKey}
+            // con el día y la hora SOLO en la clave "día|HH:MM".
+            if (isObject(v) && v.day === undefined) {
+                const m = /^(\d)\|(\d{2}:\d{2})$/.exec(String(key));
+                if (m) {
+                    const endMins = timeToMinutes(m[2]) + 75; // duración de las antiguas franjas de tarde
+                    v = { ...v, day: Number(m[1]), start: m[2], end: minutesToTime(Math.min(endMins, 24 * 60 - 1)) };
                 }
+            }
+            const clean = sanitizeExtraEntry(v);
+            if (clean) out[`${clean.day}|${clean.start}`] = clean;
+        }
+        return out;
+    };
 
-                const parsed = JSON.parse(raw);
-                if (!isObject(parsed)) return base;
+    /** Carga y sanea el estado local del invitado (migra el formato antiguo). */
+    const loadStateFromLocal = (base) => {
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
 
-                // Corrección de docencia (curso 26/27): Digitalización la imparte Marisol Casado.
-                // Se aplica también a estados ya guardados para no perpetuar el dato antiguo
-                // (si el usuario la cambió a mano a otro valor, se respeta su elección).
-                let teachersCorrected = false;
-                if (isObject(parsed.teachers) && parsed.teachers['Digitalización'] === 'María Manchado') {
-                    parsed.teachers['Digitalización'] = 'Marisol Casado';
-                    teachersCorrected = true;
+            if (!raw) {
+                // Sin estado nuevo: migra datos del formato antiguo si existen
+                const oldTasks = readLegacyArray('academic_tasks');
+                const oldAbsences = readLegacyMap('academic_absences');
+                if (oldTasks.length || Object.keys(oldAbsences).length) {
+                    // Limpia las claves antiguas tras la migración exitosa para que un
+                    // futuro reset no "resucite" datos obsoletos en la siguiente carga.
+                    try {
+                        localStorage.removeItem('academic_tasks');
+                        localStorage.removeItem('academic_absences');
+                    } catch { /* noop */ }
+                    return { ...base, tasks: oldTasks, absences: oldAbsences };
                 }
-
-                const state = {
-                    version: SCHEMA_VERSION,
-                    schedule: isObject(parsed.schedule) ? this.#sanitizeSchedule(parsed.schedule) : base.schedule,
-                    teachers: isObject(parsed.teachers) ? this.#sanitizeTeachers(parsed.teachers) : base.teachers,
-                    tasks: Array.isArray(parsed.tasks) ? parsed.tasks.filter(this.#isValidTask).map(this.#normalizeTask) : [],
-                    absences: isObject(parsed.absences) ? this.#sanitizeAbsences(parsed.absences) : {},
-                    extracurricular: isObject(parsed.extracurricular) ? this.#sanitizeExtracurricular(parsed.extracurricular) : {},
-                };
-
-                // Persiste la corrección para que localStorage quede coherente
-                if (teachersCorrected) {
-                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch { /* noop */ }
-                }
-                return state;
-            } catch (err) {
-                console.error('Store: estado corrupto, se restauran los valores por defecto.', err);
                 return base;
             }
-        }
 
-        #defaults() {
+            const parsed = JSON.parse(raw);
+            if (!isObject(parsed)) return base;
+
+            // Corrección de docencia (curso 26/27): Digitalización la imparte Marisol Casado.
+            // Se aplica también a estados ya guardados para no perpetuar el dato antiguo
+            // (si el usuario la cambió a mano a otro valor, se respeta su elección).
+            if (isObject(parsed.teachers) && parsed.teachers['Digitalización'] === 'María Manchado') {
+                parsed.teachers['Digitalización'] = 'Marisol Casado';
+                try { localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed)); } catch { /* noop */ }
+            }
+
             return {
                 version: SCHEMA_VERSION,
-                schedule: JSON.parse(JSON.stringify(DEFAULT_SCHEDULE)),
-                teachers: { ...DEFAULT_TEACHERS },
-                tasks: [],
-                absences: {},
-                // { "día|slotKey": { name, teacher, colorKey } } — turno de tarde
-                extracurricular: {},
+                schedule: isObject(parsed.schedule) ? sanitizeSchedule(parsed.schedule) : base.schedule,
+                teachers: isObject(parsed.teachers) ? sanitizeTeachers(parsed.teachers) : base.teachers,
+                tasks: Array.isArray(parsed.tasks) ? parsed.tasks.filter(isValidTask).map(normalizeTask) : [],
+                absences: isObject(parsed.absences) ? sanitizeAbsences(parsed.absences) : {},
+                grades: Array.isArray(parsed.grades) ? parsed.grades.filter(isValidGrade).map(normalizeGrade) : [],
+                extracurricular: isObject(parsed.extracurricular) ? sanitizeExtracurricular(parsed.extracurricular) : {},
             };
+        } catch (err) {
+            console.error('Store: estado corrupto, se restauran los valores por defecto.', err);
+            return base;
+        }
+    };
+
+    /**
+     * Estado normalizado a partir del documento remoto users/{uid}.
+     * Estructura idéntica a toJSON(): schedule, teachers, tasks, absences,
+     * grades y extracurricular. Tolera documentos parciales o vacíos.
+     */
+    const storeStateFromDoc = (doc) => {
+        const incoming = isObject(doc) ? doc : {};
+        const base = storeDefaults();
+        return {
+            version: SCHEMA_VERSION,
+            schedule: isObject(incoming.schedule) ? sanitizeSchedule(incoming.schedule) : base.schedule,
+            teachers: isObject(incoming.teachers) ? sanitizeTeachers(incoming.teachers) : base.teachers,
+            tasks: Array.isArray(incoming.tasks) ? incoming.tasks.filter(isValidTask).map(normalizeTask) : [],
+            absences: isObject(incoming.absences) ? sanitizeAbsences(incoming.absences) : {},
+            grades: Array.isArray(incoming.grades) ? incoming.grades.filter(isValidGrade).map(normalizeGrade) : [],
+            extracurricular: isObject(incoming.extracurricular) ? sanitizeExtracurricular(incoming.extracurricular) : {},
+        };
+    };
+
+    class Store {
+        constructor() {
+            this.isSynced = false; // false → invitado (localStorage) · true → Firestore (users/{uid})
+            this.uid = null;
+            this.state = loadStateFromLocal(storeDefaults());
         }
 
-        #readLegacyArray(key) {
-            try {
-                const parsed = JSON.parse(localStorage.getItem(key) || 'null');
-                return Array.isArray(parsed) ? parsed.filter(this.#isValidTask).map(this.#normalizeTask) : [];
-            } catch { return []; }
+        /* --- Persistencia dual: localStorage (invitado) / Firestore (autenticado) --- */
+
+        /** Invitado: recarga el estado desde localStorage. */
+        loadLocal() {
+            this.state = loadStateFromLocal(storeDefaults());
         }
 
-        #readLegacyMap(key) {
-            try {
-                const parsed = JSON.parse(localStorage.getItem(key) || 'null');
-                return isObject(parsed) ? this.#sanitizeAbsences(parsed) : {};
-            } catch { return {}; }
-        }
-
-        #isValidTask = (t) => isObject(t) && typeof t.subject === 'string' && typeof t.text === 'string';
-
-        #normalizeTask = (t) => ({
-            id: Number.isFinite(t.id) ? t.id : Date.now() + Math.floor(Math.random() * 1e6),
-            subject: String(t.subject).slice(0, 120),
-            text: String(t.text).slice(0, 300),
-            type: ['Tarea', 'Examen', 'Entrega'].includes(t.type) ? t.type : 'Tarea',
-            date: /^\d{4}-\d{2}-\d{2}$/.test(t.date || '') ? t.date : getLocalDateString(),
-            done: Boolean(t.done),
-        });
-
-        #sanitizeAbsences(absences) {
-            const out = {};
-            for (const [k, v] of Object.entries(absences)) {
-                const n = Number(v);
-                if (typeof k === 'string' && k && Number.isFinite(n)) out[k.slice(0, 120)] = clamp(Math.floor(n), 0, 999);
-            }
-            return out;
-        }
-
-        #sanitizeTeachers(teachers) {
-            const out = {};
-            for (const [k, v] of Object.entries(teachers)) {
-                if (typeof k === 'string' && k && typeof v === 'string' && v.trim()) out[k.slice(0, 120)] = v.trim().slice(0, 120);
-            }
-            return out;
-        }
-
-        #sanitizeSchedule(schedule) {
-            const out = {};
-            for (const [key, value] of Object.entries(schedule)) {
-                if (!/^[1-5]-[1-6]$/.test(key) || !isObject(value)) continue;
-                const name = typeof value.name === 'string' ? value.name.trim() : '';
-                if (!name) continue;
-                out[key] = { name: name.slice(0, 120), colorKey: COLOR_KEYS.includes(value.colorKey) ? value.colorKey : 'montaje' };
-            }
-            return out;
-        }
-
-        /** Valida UNA actividad fuera de jornada; devuelve el objeto limpio o null. */
-        #sanitizeExtraEntry(value) {
-            if (!isObject(value) || typeof value.name !== 'string' || !value.name.trim()) return null;
-            const day = Number(value.day);
-            if (!dayDef(day)) return null;
-            const timeRe = /^\d{2}:\d{2}$/;
-            const start = typeof value.start === 'string' && timeRe.test(value.start) ? value.start : null;
-            const end = typeof value.end === 'string' && timeRe.test(value.end) ? value.end : null;
-            if (!start || !end || timeToMinutes(start) >= timeToMinutes(end)) return null;
-            return {
-                day,
-                start,
-                end,
-                name: value.name.trim().slice(0, 120),
-                teacher: typeof value.teacher === 'string' ? value.teacher.trim().slice(0, 120) : '',
-                colorKey: COLOR_KEYS.includes(value.colorKey) ? value.colorKey : 'montaje',
-            };
-        }
-
-        /** Mapa completo saneado con claves "día|HH:MM". */
-        #sanitizeExtracurricular(extras) {
-            const out = {};
-            for (const [key, value] of Object.entries(extras || {})) {
-                let v = value;
-                // Compatibilidad: el formato previo guardaba {name,teacher,colorKey}
-                // con el día y la hora SOLO en la clave "día|HH:MM".
-                if (isObject(v) && v.day === undefined) {
-                    const m = /^(\d)\|(\d{2}:\d{2})$/.exec(String(key));
-                    if (m) {
-                        const endMins = timeToMinutes(m[2]) + 75; // duración de las antiguas franjas de tarde
-                        v = { ...v, day: Number(m[1]), start: m[2], end: minutesToTime(Math.min(endMins, 24 * 60 - 1)) };
-                    }
-                }
-                const clean = this.#sanitizeExtraEntry(v);
-                if (clean) out[`${clean.day}|${clean.start}`] = clean;
-            }
-            return out;
-        }
-
-        #persist() {
+        /** Persistencia local SOLO en invitado; autenticado, la nube es la fuente de verdad. */
+        saveLocal() {
+            if (this.isSynced) return;
             try {
                 localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
             } catch (err) {
@@ -431,10 +559,64 @@
             }
         }
 
-        #commit(next) {
-            this.state = { ...this.state, ...next };
-            this.#persist();
+        clearLocal() {
+            try { localStorage.removeItem(STORAGE_KEY); } catch { /* noop */ }
+        }
+
+        /**
+         * Reemplaza el estado completo por el documento remoto users/{uid} y
+         * dispara 'store:change' para redibujar la app sin recargar la página.
+         */
+        applyRemote(remote) {
+            this.state = storeStateFromDoc(remote);
+            this.saveLocal();
             document.dispatchEvent(new CustomEvent('store:change'));
+        }
+
+        /** Aplica la mutación, persiste (local o nube) y refresca la UI. */
+        commit(next) {
+            this.state = { ...this.state, ...next };
+            if (this.isSynced) this.pushRemote();
+            this.saveLocal();
+            document.dispatchEvent(new CustomEvent('store:change'));
+        }
+
+        /**
+         * Sube TODO el estado actual a users/{uid}. Solo con sesión iniciada.
+         * La estructura es idéntica a toJSON(): schedule, teachers, tasks,
+         * absences, grades y extracurricular.
+         */
+        pushRemote() {
+            if (!this.isSynced || !this.uid) return Promise.resolve();
+            return CloudSvc.saveUserDoc(this.uid, {
+                schedule: this.state.schedule,
+                teachers: this.state.teachers,
+                tasks: this.state.tasks,
+                absences: this.state.absences,
+                grades: this.state.grades,
+                extracurricular: this.state.extracurricular,
+            }).catch(err => console.error('Store: fallo al sincronizar con Firestore.', err));
+        }
+
+        /**
+         * Puerta de escritura: en modo invitado detiene la mutación y lanza el
+         * inicio de sesión con Google; tras autenticarse (migración o descarga
+         * remota incluida) la mutación continúa y se guarda en Firestore.
+         * @returns {Promise<boolean>} true si la mutación puede ejecutarse.
+         */
+        async requireWrite() {
+            if (this.isSynced) return true;
+            try {
+                const user = await CloudSvc.signIn();
+                if (!user) return false; // el usuario canceló el popup
+                await AuthSync.sync(user, { force: true });
+                return store.isSynced;
+            } catch (err) {
+                if (err && (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request')) return false;
+                console.error('Auth: no se pudo iniciar sesión.', err);
+                window.alert('No se pudo iniciar sesión con Google. Inténtalo de nuevo.');
+                return false;
+            }
         }
 
         /* --- Consultas --- */
@@ -442,6 +624,30 @@
         get schedule() { return this.state.schedule; }
         get teachers() { return this.state.teachers; }
         get extracurricular() { return this.state.extracurricular; }
+        get grades() { return this.state.grades; }
+
+        gradesFor(subject) {
+            return this.state.grades.filter(g => g.subject === subject);
+        }
+
+        async addGrade(data) {
+            if (!(await this.requireWrite())) return null; // invitado → login Google
+            const grade = normalizeGrade({ ...data, id: Date.now() + Math.floor(Math.random() * 1e6) });
+            this.commit({ grades: [...this.state.grades, grade] });
+            return grade;
+        }
+
+        async removeGrade(id) {
+            if (!(await this.requireWrite())) return; // invitado → login Google
+            this.commit({ grades: this.state.grades.filter(g => g.id !== id) });
+        }
+
+        gradeStats(subject) {
+            const list = this.gradesFor(subject);
+            if (!list.length) return { average: null, count: 0 };
+            const sum = list.reduce((acc, g) => acc + g.value, 0);
+            return { average: sum / list.length, count: list.length };
+        }
 
         getAbsences(subject) { return this.state.absences[subject] || 0; }
         getTeacher(subject) { return this.state.teachers[subject] || 'Sin asignar'; }
@@ -519,29 +725,36 @@
             return map;
         }
 
-        /* --- Mutaciones (inmutables + persistencia atómica) --- */
-        addTask(data) {
-            const task = this.#normalizeTask({ ...data, id: Date.now() + Math.floor(Math.random() * 1e6) });
-            this.#commit({ tasks: [...this.state.tasks, task] });
+        /* --- Mutaciones (inmutables + persistencia atómica).
+             Cada una pasa por requireWrite(): en modo invitado se detiene y
+             lanza el login con Google; al autenticarse continúa en la nube. --- */
+        async addTask(data) {
+            if (!(await this.requireWrite())) return null; // invitado → login Google
+            const task = normalizeTask({ ...data, id: Date.now() + Math.floor(Math.random() * 1e6) });
+            this.commit({ tasks: [...this.state.tasks, task] });
             return task;
         }
 
-        removeTask(id) {
-            this.#commit({ tasks: this.state.tasks.filter(t => t.id !== id) });
+        async removeTask(id) {
+            if (!(await this.requireWrite())) return; // invitado → login Google
+            this.commit({ tasks: this.state.tasks.filter(t => t.id !== id) });
         }
 
-        setTaskDone(id, done) {
-            this.#commit({ tasks: this.state.tasks.map(t => (t.id === id ? { ...t, done } : t)) });
+        async setTaskDone(id, done) {
+            if (!(await this.requireWrite())) return; // invitado → login Google
+            this.commit({ tasks: this.state.tasks.map(t => (t.id === id ? { ...t, done } : t)) });
         }
 
-        setAbsences(subject, count) {
+        async setAbsences(subject, count) {
+            if (!(await this.requireWrite())) return; // invitado → login Google
             const absences = { ...this.state.absences };
             // Techo holgado: el límite real lo calcula absenceStats() (15 % del trimestre)
             absences[subject] = clamp(Math.round(count), 0, 99);
-            this.#commit({ absences });
+            this.commit({ absences });
         }
 
-        setSlot(day, slot, entry) {
+        async setSlot(day, slot, entry) {
+            if (!(await this.requireWrite())) return false; // invitado → login Google
             const schedule = { ...this.state.schedule };
             const key = `${day}-${slot}`;
             if (entry && entry.name) schedule[key] = { name: entry.name.trim(), colorKey: entry.colorKey };
@@ -551,11 +764,13 @@
             if (entry && entry.name && entry.teacher && entry.teacher.trim()) {
                 teachers[entry.name.trim()] = entry.teacher.trim();
             }
-            this.#commit({ schedule, teachers });
+            this.commit({ schedule, teachers });
+            return true;
         }
 
         /** Renombra una asignatura en todas sus franjas y actualiza el profesor. */
-        renameSubject(oldName, newName, teacher) {
+        async renameSubject(oldName, newName, teacher) {
+            if (!(await this.requireWrite())) return false; // invitado → login Google
             const schedule = {};
             Object.entries(this.state.schedule).forEach(([key, v]) => {
                 schedule[key] = v.name === oldName ? { ...v, name: newName } : v;
@@ -567,24 +782,29 @@
             const teachers = { ...this.state.teachers };
             delete teachers[oldName];
             if (teacher && teacher.trim()) teachers[newName] = teacher.trim();
-            this.#commit({ schedule, extracurricular, teachers });
+            this.commit({ schedule, extracurricular, teachers });
+            return true;
         }
 
         /* --- Actividades fuera de jornada (horario libre) --- */
-        setExtra(entry) {
-            const clean = this.#sanitizeExtraEntry(entry);
-            if (!clean) return; // rechaza entradas inválidas en vez de guardar undefined
+        async setExtra(entry) {
+            const clean = sanitizeExtraEntry(entry);
+            if (!clean) return false; // rechaza entradas inválidas en vez de guardar undefined
+            if (!(await this.requireWrite())) return false; // invitado → login Google
             const extracurricular = { ...this.state.extracurricular };
             extracurricular[`${clean.day}|${clean.start}`] = clean;
             const teachers = { ...this.state.teachers };
             if (entry.teacher && entry.teacher.trim()) teachers[clean.name] = entry.teacher.trim();
-            this.#commit({ extracurricular, teachers });
+            this.commit({ extracurricular, teachers });
+            return true;
         }
 
-        removeExtra(day, start) {
+        async removeExtra(day, start) {
+            if (!(await this.requireWrite())) return false; // invitado → login Google
             const extracurricular = { ...this.state.extracurricular };
             delete extracurricular[`${day}|${start}`];
-            this.#commit({ extracurricular });
+            this.commit({ extracurricular });
+            return true;
         }
 
         /** Lista cronológica de extras (por día y hora). */
@@ -600,24 +820,40 @@
             return this.extrasList().filter(x => x.day === dayId);
         }
 
-        replaceAll(incoming) {
-            const base = this.#defaults();
+        async replaceAll(incoming) {
+            if (!(await this.requireWrite())) return false; // invitado → login Google
+            const base = storeDefaults();
             this.state = {
                 version: SCHEMA_VERSION,
-                schedule: isObject(incoming.schedule) ? this.#sanitizeSchedule(incoming.schedule) : base.schedule,
-                teachers: isObject(incoming.teachers) ? this.#sanitizeTeachers(incoming.teachers) : base.teachers,
-                tasks: Array.isArray(incoming.tasks) ? incoming.tasks.filter(this.#isValidTask).map(this.#normalizeTask) : [],
-                absences: isObject(incoming.absences) ? this.#sanitizeAbsences(incoming.absences) : {},
-                extracurricular: isObject(incoming.extracurricular) ? this.#sanitizeExtracurricular(incoming.extracurricular) : {},
+                schedule: isObject(incoming.schedule) ? sanitizeSchedule(incoming.schedule) : base.schedule,
+                teachers: isObject(incoming.teachers) ? sanitizeTeachers(incoming.teachers) : base.teachers,
+                tasks: Array.isArray(incoming.tasks) ? incoming.tasks.filter(isValidTask).map(normalizeTask) : [],
+                absences: isObject(incoming.absences) ? sanitizeAbsences(incoming.absences) : {},
+                grades: Array.isArray(incoming.grades) ? incoming.grades.filter(isValidGrade).map(normalizeGrade) : [],
+                extracurricular: isObject(incoming.extracurricular) ? sanitizeExtracurricular(incoming.extracurricular) : {},
             };
-            this.#persist();
+            this.saveLocal();
             document.dispatchEvent(new CustomEvent('store:change'));
+            return true;
         }
 
-        resetAll() {
-            try { localStorage.removeItem(STORAGE_KEY); } catch { /* noop */ }
-            this.state = this.#defaults();
-            this.#persist();
+        /** Restaura los datos por defecto (invitado: local · autenticado: nube). */
+        async resetAll() {
+            if (!(await this.requireWrite())) return; // invitado → login Google
+            if (this.isSynced && this.uid) {
+                // El estado por defecto se reconstruye desde cero: se vacía el
+                // documento remoto para no conservar datos obsoletos en la nube.
+                try {
+                    await CloudSvc.deleteUserDoc(this.uid);
+                } catch (err) {
+                    console.error('Store: no se pudo vaciar el documento remoto.', err);
+                    window.alert('No se pudo restaurar en la nube. Inténtalo de nuevo.');
+                    return;
+                }
+            }
+            this.clearLocal();
+            this.state = storeDefaults();
+            if (!this.isSynced) this.saveLocal();
             document.dispatchEvent(new CustomEvent('store:change'));
         }
 
@@ -629,12 +865,110 @@
                 teachers: this.state.teachers,
                 tasks: this.state.tasks,
                 absences: this.state.absences,
+                grades: this.state.grades,
                 extracurricular: this.state.extracurricular,
             };
         }
     }
 
     const store = new Store();
+
+    /* ===================== Sincronización en la nube (migración + Firestore) ===================== */
+
+    const AuthSync = {
+        _inflight: null,
+        authUnsub: null,
+
+        /**
+         * Flujo al autenticarse (idempotente: llamadas concurrentes comparten
+         * la misma promesa):
+         *  1. Descarga users/{uid}.
+         *  2. Documento inexistente + clave local `academic_dashboard_v1` →
+         *     migración automática: sube el estado local y borra la clave.
+         *  3. Documento existente (o sin datos locales) → manda el remoto y
+         *     se ignora el localStorage.
+         */
+        async sync(user, { force = false } = {}) {
+            if (!force && store.isSynced && store.uid === user.uid) return;
+            if (this._inflight) return this._inflight;
+            this._inflight = this._syncInner(user).finally(() => { this._inflight = null; });
+            return this._inflight;
+        },
+
+        async _syncInner(user) {
+            try {
+                const remote = await CloudSvc.fetchUserDoc(user.uid);
+                const hadLocal = (() => { try { return Boolean(localStorage.getItem(STORAGE_KEY)); } catch { return false; } })();
+
+                store.uid = user.uid;
+                store.isSynced = true;
+
+                if (!remote && hadLocal) {
+                    // Migración automática: sube el estado local tal cual a users/{uid}
+                    await CloudSvc.saveUserDoc(user.uid, {
+                        schedule: store.state.schedule,
+                        teachers: store.state.teachers,
+                        tasks: store.state.tasks,
+                        absences: store.state.absences,
+                        grades: store.state.grades,
+                        extracurricular: store.state.extracurricular,
+                    });
+                    // El spec exige eliminar la clave local tras subir con éxito
+                    // para evitar futuras inconsistencias local/nube.
+                    store.clearLocal();
+                    console.info('AuthSync: estado local migrado a Firestore (users/%s).', user.uid);
+                    document.dispatchEvent(new CustomEvent('store:change'));
+                } else {
+                    // Documento existente (o arranque en blanco): manda la nube
+                    store.applyRemote(remote);
+                }
+
+                renderAuthUI();
+                showAuthToast(!remote && hadLocal
+                    ? 'Datos locales migrados a la nube ✓'
+                    : 'Sesión iniciada: tus datos se guardan en la nube.');
+            } catch (err) {
+                store.isSynced = false;
+                store.uid = null;
+                renderAuthUI();
+                throw err;
+            }
+        },
+
+        /** Cierre de sesión: vuelve al modo invitado con sus datos locales. */
+        async unsync() {
+            try { await CloudSvc.signOut(); } catch (err) { console.error('Auth: fallo al cerrar sesión.', err); }
+            store.isSynced = false;
+            store.uid = null;
+            store.loadLocal();
+            renderAuthUI();
+            showAuthToast('Sesión cerrada: modo invitado (los cambios requieren iniciar sesión).');
+        },
+
+        /** Arranque: restaura la sesión previa (Auth persiste la sesión por defecto). */
+        async boot() {
+            if (!FIREBASE_ENABLED) {
+                renderAuthUI();
+                return;
+            }
+            try {
+                await CloudSvc.init();
+            } catch (err) {
+                console.error('Firebase: no se pudo inicializar (¿sin conexión o configuración inválida?).', err);
+                renderAuthUI();
+                return;
+            }
+            this.authUnsub = CloudSvc.authApi.onAuthStateChanged(CloudSvc.auth, (user) => {
+                if (user) {
+                    this.sync(user).catch(err => console.error('AuthSync: fallo al sincronizar con Firestore.', err));
+                } else {
+                    store.isSynced = false;
+                    store.uid = null;
+                    renderAuthUI();
+                }
+            });
+        },
+    };
 
     /* ============================== Estado de la UI ============================== */
 
@@ -674,6 +1008,7 @@
         btnPrint: $('#btn-print'),
         btnAddSubject: $('#btn-add-subject'),
         btnExport: $('#btn-export'),
+        btnExportIcs: $('#btn-export-ics'),
         btnImport: $('#btn-import'),
         importFile: $('#import-file'),
         btnReset: $('#btn-reset'),
@@ -731,6 +1066,13 @@
         absenceProgressLabel: $('#absence-progress-label'),
         absenceTrimesterInfo: $('#absence-trimester-info'),
 
+        gradeForm: $('#grade-form'),
+        gradeName: $('#grade-name'),
+        gradeValue: $('#grade-value'),
+        gradeList: $('#grade-list'),
+        gradeAverageDisplay: $('#grade-average-display'),
+        gradeNeededDisplay: $('#grade-needed-display'),
+
         editorModal: $('#subject-editor-modal'),
         editorClose: $('#editor-close'),
         editorTag: $('#editor-tag'),
@@ -749,6 +1091,17 @@
         editorError: $('#editor-error'),
         btnDeleteSlot: $('#btn-delete-slot'),
         btnEditorCancel: $('#btn-editor-cancel'),
+
+        // Autenticación (header)
+        authArea: $('#auth-area'),
+        btnLoginGoogle: $('#btn-login-google'),
+        userChip: $('#user-chip'),
+        userAvatar: $('#user-avatar'),
+        userFallback: $('#user-fallback'),
+        userName: $('#user-name'),
+        userEmail: $('#user-email'),
+        btnLogout: $('#btn-logout'),
+        authToast: $('#auth-toast'),
     };
 
     /* ============================== Gestión de foco ============================== */
@@ -1472,6 +1825,7 @@
             dom.modalTeacher.textContent = teacher;
             renderModalResources(teacher);   // ← filtrado estricto por docente
             renderTaskList();
+            renderGradesList();
             updateAbsenceDisplay();
         }
         selectModalTab('info');
@@ -1567,11 +1921,71 @@
         dom.modalTeacher.textContent = entry.teacher || store.getTeacher(entry.name);
         renderModalResources(dom.modalTeacher.textContent); // misma regla estricta de recursos
         renderTaskList();
+        renderGradesList();
         updateAbsenceDisplay();
         selectModalTab('info');
 
         openOverlay(dom.modal);
     }
+
+    /* ============================== Calculadora de notas ============================== */
+
+    function renderGradesList() {
+        if (!ui.currentActiveSubject) return;
+        const list = store.gradesFor(ui.currentActiveSubject);
+        const stats = store.gradeStats(ui.currentActiveSubject);
+
+        const frag = document.createDocumentFragment();
+        if (!list.length) {
+            frag.appendChild(el('p', { className: 'absence-hint', text: 'No hay exámenes registrados para este módulo.' }));
+        }
+
+        list.forEach(g => {
+            const delBtn = el('button', {
+                className: 'btn-del-task',
+                attrs: { type: 'button', 'aria-label': `Eliminar nota: ${g.name}` },
+                text: '×',
+            });
+            delBtn.addEventListener('click', () => {
+                store.removeGrade(g.id);
+            });
+
+            const label = el('span');
+            label.appendChild(el('strong', { text: `${g.name}: ` }));
+            label.appendChild(document.createTextNode(`${g.value.toFixed(1)} / 10`));
+
+            frag.appendChild(el('div', {
+                className: 'task-item',
+                children: [label, delBtn],
+            }));
+        });
+
+        dom.gradeList.replaceChildren(frag);
+
+        if (stats.average === null) {
+            dom.gradeAverageDisplay.textContent = '-- / 10';
+            dom.gradeNeededDisplay.textContent = 'Añade notas de exámenes para calcular la media.';
+        } else {
+            dom.gradeAverageDisplay.textContent = `${stats.average.toFixed(2)} / 10`;
+            dom.gradeNeededDisplay.textContent = 'ℹ️ Nota no definitiva: esta media corresponde únicamente a los exámenes. Falta añadir la calificación de las tareas/trabajos y comportamiento (20-30% restante).';
+        }
+    }
+
+    dom.gradeForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!ui.currentActiveSubject) return;
+        const name = dom.gradeName.value.trim();
+        const value = parseFloat(dom.gradeValue.value);
+
+        if (!name || isNaN(value)) return;
+
+        // addGrade es asíncrono: en modo invitado detiene la acción y lanza el login
+        store.addGrade({ subject: ui.currentActiveSubject, name, value });
+
+        dom.gradeName.value = '';
+        dom.gradeValue.value = '';
+        dom.gradeName.focus();
+    });
 
     /* ============================== Faltas + barra de progreso ============================== */
 
@@ -1738,7 +2152,7 @@
             timeToMinutes(start) < timeToMinutes(x.end) &&
             timeToMinutes(end) > timeToMinutes(x.start));
 
-    dom.editorForm.addEventListener('submit', (e) => {
+    dom.editorForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         const name = dom.subjectName.value.trim();
         const teacher = dom.subjectTeacher.value.trim();
@@ -1784,9 +2198,9 @@
                 const oldEntry = store.extracurricular[`${ui.editingExtra.day}|${ui.editingExtra.start}`];
                 const moved = ui.editingExtra.day !== day || ui.editingExtra.start !== start;
                 if (oldEntry && oldEntry.name !== name) {
-                    store.renameSubject(oldEntry.name, name, teacher);
+                    await store.renameSubject(oldEntry.name, name, teacher);
                 }
-                if (moved) store.removeExtra(ui.editingExtra.day, ui.editingExtra.start); // libera el origen
+                if (moved) await store.removeExtra(ui.editingExtra.day, ui.editingExtra.start); // libera el origen
             }
             store.setExtra({ day, start, end, name, teacher, colorKey });
             closeEditor();
@@ -1814,10 +2228,10 @@
             const moved = oldDay !== day || oldSlot !== slot;
 
             if (oldEntry && oldEntry.name !== name) {
-                store.renameSubject(oldEntry.name, name, teacher); // renombra todas las franjas
+                await store.renameSubject(oldEntry.name, name, teacher); // renombra todas las franjas
             }
             if (moved) {
-                store.setSlot(oldDay, oldSlot, null);              // libera el origen
+                await store.setSlot(oldDay, oldSlot, null);              // libera el origen
             }
             store.setSlot(day, slot, { name, colorKey, teacher });
         } else {
@@ -1843,6 +2257,80 @@
         if (e.target === dom.editorModal) closeEditor();
     });
 
+    /* ============================== Autenticación: UI (header) ============================== */
+
+    const GOOGLE_G_SVG = '<svg class="google-g" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.28-1.72V4.95H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>';
+
+    const userInitials = (user) => {
+        const base = String(user.displayName || user.email || '?').trim();
+        const parts = base.split(/\s+/);
+        return (parts.length >= 2 ? parts[0][0] + parts[parts.length - 1][0] : base.slice(0, 2)).toUpperCase();
+    };
+
+    /** Pinta el área de autenticación del header según la sesión actual. */
+    function renderAuthUI() {
+        if (!dom.authArea) return;
+        const user = (CloudSvc.ready && CloudSvc.auth) ? CloudSvc.auth.currentUser : null;
+        if (user) {
+            dom.authArea.classList.add('is-auth');
+            dom.btnLoginGoogle.hidden = true;
+            dom.userChip.hidden = false;
+            if (user.photoURL) {
+                dom.userAvatar.src = user.photoURL;
+                dom.userAvatar.hidden = false;
+                dom.userFallback.hidden = true;
+            } else {
+                dom.userAvatar.removeAttribute('src');
+                dom.userAvatar.hidden = true;
+                dom.userFallback.hidden = false;
+                dom.userFallback.textContent = userInitials(user);
+            }
+            dom.userName.textContent = user.displayName || 'Usuario';
+            dom.userEmail.textContent = user.email || '';
+        } else {
+            dom.authArea.classList.remove('is-auth');
+            dom.btnLoginGoogle.hidden = false;
+            dom.userChip.hidden = true;
+        }
+    }
+
+    let authToastTimer = null;
+    function showAuthToast(message) {
+        if (!dom.authToast) return;
+        dom.authToast.textContent = message;
+        dom.authToast.hidden = false;
+        dom.authToast.classList.add('visible');
+        clearTimeout(authToastTimer);
+        authToastTimer = setTimeout(() => {
+            dom.authToast.classList.remove('visible');
+            dom.authToast.hidden = true;
+        }, 4000);
+    }
+
+    if (dom.btnLoginGoogle) {
+        dom.btnLoginGoogle.addEventListener('click', async () => {
+            dom.btnLoginGoogle.disabled = true;
+            try {
+                const user = await CloudSvc.signIn();
+                if (user) await AuthSync.sync(user, { force: true });
+            } catch (err) {
+                if (!(err && (err.code === 'auth/popup-closed-by-user' || err.code === 'auth/cancelled-popup-request'))) {
+                    console.error('Auth: no se pudo iniciar sesión.', err);
+                    showAuthToast('No se pudo iniciar sesión con Google. Inténtalo de nuevo.');
+                }
+            } finally {
+                dom.btnLoginGoogle.disabled = false;
+            }
+        });
+    }
+
+    if (dom.btnLogout) {
+        dom.btnLogout.addEventListener('click', () => AuthSync.unsync());
+    }
+
+    // Última sincronización al cerrar/ocultar la pestaña (por si queda algo en vuelo)
+    window.addEventListener('pagehide', () => { if (store.isSynced) store.pushRemote(); });
+
     /* ============================== Export / Import / Reset ============================== */
 
     function exportData() {
@@ -1858,6 +2346,49 @@
             console.error('Export: fallo al generar el archivo.', err);
             window.alert('No se pudo generar el archivo de respaldo.');
         }
+        
+    }
+
+    function exportToICS() {
+        const tasks = store.tasks;
+        if (!tasks.length) {
+            window.alert('No hay tareas o exámenes agendados para exportar.');
+            return;
+        }
+
+        let icsContent = [
+            'BEGIN:VCALENDAR',
+            'VERSION:2.0',
+            'PRODID:-//Horario 2SMR//ES',
+            'CALSCALE:GREGORIAN'
+        ];
+
+        tasks.forEach(t => {
+            const dateStr = t.date.replace(/-/g, '');
+            icsContent.push(
+                'BEGIN:VEVENT',
+                `SUMMARY:[${t.type}] ${t.subject} - ${t.text}`,
+                `DTSTART;VALUE=DATE:${dateStr}`,
+                `DTEND;VALUE=DATE:${dateStr}`,
+                `DESCRIPTION:Asignatura: ${t.subject} \\nTipo: ${t.type}`,
+                'END:VEVENT'
+            );
+        });
+
+        icsContent.push('END:VCALENDAR');
+
+        try {
+            const blob = new Blob([icsContent.join('\r\n')], { type: 'text/calendar;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = el('a', { attrs: { href: url, download: `examenes-2smr-${getLocalDateString()}.ics` } });
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('ICS Export: fallo al generar el archivo.', err);
+            window.alert('No se pudo generar el archivo .ics.');
+        }
     }
 
     function importData(file) {
@@ -1867,8 +2398,10 @@
                 const data = JSON.parse(reader.result);
                 if (!isObject(data)) throw new Error('el archivo no contiene un objeto JSON');
                 if (!window.confirm('Esto reemplazará horario, profesores, tareas y faltas actuales por los del archivo. ¿Continuar?')) return;
-                store.replaceAll(data);
-                window.alert('Datos importados correctamente.');
+                store.replaceAll(data).then(ok => {
+                    if (ok) window.alert('Datos importados correctamente.');
+                    // Si ok === false el flujo de login con Google ya está en marcha
+                });
             } catch (err) {
                 console.error('Import: archivo inválido.', err);
                 window.alert(`No se pudo importar el archivo: ${err.message}`);
@@ -1879,6 +2412,7 @@
     }
 
     dom.btnExport.addEventListener('click', exportData);
+    dom.btnExportIcs.addEventListener('click', exportToICS);
     dom.btnImport.addEventListener('click', () => dom.importFile.click());
     dom.importFile.addEventListener('change', (e) => {
         const file = e.target.files?.[0];
@@ -1900,6 +2434,7 @@
         const text = dom.taskInput.value.trim();
         if (!text) return;
 
+        // addTask es asíncrono: en modo invitado detiene la acción y lanza el login
         store.addTask({
             subject: ui.currentActiveSubject,
             text,
@@ -2032,6 +2567,7 @@
         if ($('#directory-view').classList.contains('active')) renderDirectory();
         if (ui.currentActiveSubject && dom.modal.classList.contains('active')) {
             renderTaskList();
+            renderGradesList();
             updateAbsenceDisplay();
         }
     });
@@ -2076,6 +2612,9 @@
         renderCalendar();
         renderDirectory();
         renderGeneralResources();
+
+        renderAuthUI();
+        AuthSync.boot(); // restaura sesión previa, migra localStorage o descarga users/{uid}
 
         updateLiveTracker(true);
         setInterval(() => updateLiveTracker(true), 1000);

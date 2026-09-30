@@ -10,7 +10,11 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     <link rel="icon" type="image/png" href="favicon.png">
     <link rel="stylesheet" href="styles.css">
-    <script src="script.js?v=11" defer></script>
+    <!--
+      script.js importa los ES modules del SDK de Firebase (app, auth y firestore)
+      directamente desde gstatic: no hace falta ningún build ni bundler.
+    -->
+    <script src="script.js?v=12" type="module"></script>
 </head>
 <body>
     <a class="skip-link" href="#main-content">Saltar al contenido principal</a>
@@ -35,6 +39,24 @@
             <button id="btn-theme" class="btn-icon" title="Cambiar tema" aria-label="Cambiar tema claro u oscuro">
                 <svg class="svg-icon" id="theme-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
             </button>
+
+            <!-- Autenticación Firebase (Google): invitado vs sesión iniciada -->
+            <div id="auth-area" class="auth-area">
+                <button id="btn-login-google" class="btn-google-login" type="button" title="Iniciar sesión con Google para guardar tus datos en la nube">
+                    <svg class="google-g" viewBox="0 0 18 18" aria-hidden="true"><path fill="#4285F4" d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.92c1.7-1.57 2.68-3.88 2.68-6.62z"/><path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.92-2.26c-.8.54-1.84.86-3.04.86-2.34 0-4.32-1.58-5.03-3.7H.96v2.33A9 9 0 0 0 9 18z"/><path fill="#FBBC05" d="M3.97 10.72A5.4 5.4 0 0 1 3.68 9c0-.6.1-1.18.28-1.72V4.95H.96A9 9 0 0 0 0 9c0 1.45.35 2.83.96 4.05l3.01-2.33z"/><path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.43 0 9 0A9 9 0 0 0 .96 4.95l3.01 2.33C4.68 5.16 6.66 3.58 9 3.58z"/></svg>
+                    <span class="btn-google-label">Iniciar sesión con Google</span>
+                </button>
+
+                <div id="user-chip" class="user-chip" hidden>
+                    <img id="user-avatar" class="user-avatar" alt="Foto de perfil" referrerpolicy="no-referrer">
+                    <span id="user-fallback" class="user-avatar user-avatar-fallback" aria-hidden="true"></span>
+                    <span class="user-meta">
+                        <span id="user-name" class="user-name">Usuario</span>
+                        <span id="user-email" class="user-email">usuario@gmail.com</span>
+                    </span>
+                    <button id="btn-logout" class="btn-logout" type="button" aria-label="Cerrar sesión de Google" title="Cerrar sesión">Cerrar sesión</button>
+                </div>
+            </div>
         </div>
     </header>
 
@@ -74,6 +96,10 @@
             <button id="btn-export" class="btn-sidebar-action">
                 <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                 Exportar datos (JSON)
+            </button>
+            <button id="btn-export-ics" class="btn-sidebar-action">
+                <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                Exportar a iCal (.ics)
             </button>
             <button id="btn-import" class="btn-sidebar-action">
                 <svg class="svg-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
@@ -197,6 +223,7 @@
                 <button class="tab-btn active" data-tab="info" role="tab" aria-selected="true" aria-controls="tab-info" id="tab-btn-info">General</button>
                 <button class="tab-btn" data-tab="tasks" role="tab" aria-selected="false" aria-controls="tab-tasks" id="tab-btn-tasks" tabindex="-1">Tareas/Exámenes <span id="tab-task-count" class="badge-count">0</span></button>
                 <button class="tab-btn" data-tab="absences" role="tab" aria-selected="false" aria-controls="tab-absences" id="tab-btn-absences" tabindex="-1">Faltas</button>
+                <button class="tab-btn" data-tab="grades" role="tab" aria-selected="false" aria-controls="tab-grades" id="tab-btn-grades" tabindex="-1">Notas</button>
             </div>
 
             <!-- Tab General -->
@@ -282,6 +309,25 @@
                     <p class="absence-hint">Registra y controla las horas que no has asistido a este módulo.</p>
                 </div>
             </div>
+
+            <!-- Tab Notas -->
+            <div class="tab-content" id="tab-grades" role="tabpanel" aria-labelledby="tab-btn-grades" tabindex="0" hidden>
+                <form id="grade-form" class="grade-form">
+                    <label class="visually-hidden" for="grade-name">Concepto del examen</label>
+                    <input type="text" id="grade-name" placeholder="Ej: Examen Tema 1, Examen práctico…" required maxlength="60">
+                    <label class="visually-hidden" for="grade-value">Nota (0-10)</label>
+                    <input type="number" id="grade-value" min="0" max="10" step="0.1" placeholder="Nota" required>
+                    <button type="submit" class="btn-add" aria-label="Añadir examen">+</button>
+                </form>
+                <div class="grade-list" id="grade-list" aria-live="polite"></div>
+                <div class="grade-summary-box" id="grade-summary-box">
+                    <div class="grade-summary-row">
+                        <span>Media de exámenes:</span>
+                        <strong id="grade-average-display">-- / 10</strong>
+                    </div>
+                    <p class="absence-hint" id="grade-needed-display">Añade notas de exámenes para calcular la media.</p>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -344,5 +390,8 @@
     <footer class="app-footer">
         <p>Horario Académico Interactivo &bull; FP Sistemas Microinformáticos y Redes</p>
     </footer>
+
+    <!-- Aviso efímero de autenticación (accesible, no intrusivo) -->
+    <div id="auth-toast" class="auth-toast" role="status" aria-live="polite" hidden></div>
 </body>
 </html>
